@@ -1,0 +1,36 @@
+replicaCount: 1
+
+image:
+  repository: nginxdemos/hello
+  tag: plain-text
+  pullPolicy: IfNotPresent
+
+service:
+  type: ClusterIP
+  port: 80
+
+ingress:
+  enabled: true
+  className: nginx
+  host: hello-world.local
+  path: /
+
+configMap:
+  message: "Hello, World!"
+
+secret:
+  greetingKey: "c2lkZWNhci10ZXN0LXNlY3JldA==" # base64("sidecar-test-secret")
+
+persistence:
+  enabled: true
+  size: 1Gi
+  storageClassName: ""
+  accessMode: ReadWriteOnce
+
+resources:
+  requests:
+    cpu: 50m
+    memory: 32Mi
+  limits:
+    cpu: 200m
+    memory: 128Mi

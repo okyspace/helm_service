@@ -1,0 +1,95 @@
+# Test deployment: a simple app container (ships the hello-world chart at
+# /app, see app/Containerfile) paired with the helm-sidecar in one pod. The
+# app container's entrypoint copies the chart into a volume shared with the
+# sidecar (the sidecar can't see the app container's private filesystem),
+# then calls the sidecar's HTTP API (lint, template, and optionally
+# install) over 127.0.0.1:8080.
+#
+# RBAC below is scoped to exactly what the hello-world chart's resources
+# need (Deployment, Service, ConfigMap, Secret, PVC, ServiceAccount,
+# Ingress) plus Helm's own release-storage Secrets, in this namespace only.
+#
+# Apply with ./run.sh, or `kubectl apply -f manifest.yaml` directly once
+# the images are built/loaded into your cluster.
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: helm-sidecar-test
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: helm-sidecar-test-sa
+  namespace: helm-sidecar-test
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: Role
+metadata:
+  name: helm-sidecar-test-role
+  namespace: helm-sidecar-test
+rules:
+  - apiGroups: [""]
+    resources: ["secrets", "configmaps", "services", "persistentvolumeclaims", "serviceaccounts"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["apps"]
+    resources: ["deployments"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+  - apiGroups: ["networking.k8s.io"]
+    resources: ["ingresses"]
+    verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: RoleBinding
+metadata:
+  name: helm-sidecar-test-rb
+  namespace: helm-sidecar-test
+subjects:
+  - kind: ServiceAccount
+    name: helm-sidecar-test-sa
+    namespace: helm-sidecar-test
+roleRef:
+  kind: Role
+  name: helm-sidecar-test-role
+  apiGroup: rbac.authorization.k8s.io
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: hello-world-test
+  namespace: helm-sidecar-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: hello-world-test
+  template:
+    metadata:
+      labels:
+        app: hello-world-test
+    spec:
+      serviceAccountName: helm-sidecar-test-sa
+      volumes:
+        - name: shared-charts
+          emptyDir: {}
+      containers:
+        - name: app
+          image: helm-sidecar-test-app:latest
+          imagePullPolicy: Never
+          env:
+            - { name: HELM_SIDECAR_URL, value: "http://127.0.0.1:8080" }
+            - { name: RELEASE_NAME, value: "hello" }
+            - { name: NAMESPACE, value: "helm-sidecar-test" }
+            - { name: RUN_INSTALL, value: "true" } # set to "false" to only lint/template, no cluster mutation
+          volumeMounts:
+            - { name: shared-charts, mountPath: /shared-charts }
+        - name: helm-sidecar
+          image: helm-sidecar:latest
+          imagePullPolicy: Never
+          ports:
+            - containerPort: 8080
+          volumeMounts:
+            - { name: shared-charts, mountPath: /shared-charts, readOnly: true }
+          securityContext:
+            runAsNonRoot: true
+            readOnlyRootFilesystem: true
+            allowPrivilegeEscalation: false
