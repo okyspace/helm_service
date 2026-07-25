@@ -60,7 +60,10 @@ networkPolicy:
     podSelector: {}
     namespaceSelector: {}
 
-podSecurityContext: {}
+podSecurityContext:
+  runAsNonRoot: true
+  seccompProfile:
+    type: RuntimeDefault
 
 securityContext:
   runAsNonRoot: true

@@ -285,6 +285,64 @@ targeted at what actually matters for this codebase:
   `encoding/json`'s classic `omitempty`) — replaced with Go 1.24+'s
   `omitzero`, which does honor `time.Time.IsZero()`.
 
+### CVE / misconfiguration scanning: Trivy
+
+[`trivy`](https://trivy.dev) covers two purposes here, run at two different
+layers:
+
+1. **Image scanning** — `build.sh`'s `SCAN=true` runs `trivy image
+   --severity HIGH,CRITICAL` against the built image, catching known CVEs
+   in the OS/library layer the final `distroless/static-debian12` image
+   ships (i.e. auditing the *runtime* artifact both modes deploy).
+2. **Dependency and IaC scanning** — `trivy fs --scanners vuln,misconfig,secret .`
+   run against the repo catches known CVEs in the Go module graph
+   (`go.sum`), misconfigurations in the Kubernetes/Helm manifests under
+   `deploy/` and `test/`, and accidentally committed secrets. This doesn't
+   need a built image, so it's the layer to run in environments (like this
+   one) where pulling `docker.io/library/golang` to build the image is
+   blocked by egress policy.
+
+Findings from the dependency/IaC pass, and what was done about each:
+
+- **`deploy/deployment`'s pod spec had no pod-level `securityContext`**
+  (`AVD-KSV-0118`, HIGH) — the container-level `securityContext` already
+  set `runAsNonRoot`, but Trivy's check looks at the pod level too, and an
+  empty `podSecurityContext: {}` doesn't communicate that intent for any
+  future sidecar added to the pod. Fixed: `values.yaml` now defaults
+  `podSecurityContext` to `runAsNonRoot: true` and
+  `seccompProfile.type: RuntimeDefault`.
+- **`deploy/deployment`'s default RBAC `Role` grants `create`/`update`/
+  `delete` on `services`/`ingresses`** (`AVD-KSV-0056`, HIGH) — not fixed,
+  by design: this chart's whole purpose is letting its ServiceAccount
+  install arbitrary charts on a caller's behalf, and those charts create
+  exactly these resource kinds (see `test/hello-world`). The
+  [Security section](deploy/deployment/README.md#security) already tells
+  operators to narrow `rbac.rules` to what they actually intend to serve;
+  narrowing the shipped default would just break that stated use case for
+  no security gain, since the true fix is per-deployment scoping, not a
+  different one-size-fits-all default.
+- **`golang.org/x/crypto@v0.54.0`, `GO-2026-5932`** (severity: `UNKNOWN`,
+  an advisory rather than a scored CVE) — the advisory is about
+  `golang.org/x/crypto/openpgp` being unmaintained and unsafe by design.
+  Checked reachability with `go list -deps ./...`: this binary's build
+  graph pulls in unrelated subpackages of that module (`bcrypt`, `blake2b`,
+  `cast5`, etc., via transitive dependencies) but never `openpgp` itself —
+  the actual OpenPGP implementation in this build graph is
+  `github.com/ProtonMail/go-crypto/openpgp`, the maintained fork the
+  advisory itself recommends. `go.sum` still pins the whole module
+  (Go can't version subpackages independently), so `trivy fs` flags it at
+  module granularity even though the vulnerable package isn't in the
+  compiled binary. Nothing to fix; noted here rather than silenced, so a
+  future dependency bump that actually starts using `x/crypto/openpgp`
+  doesn't get missed by assuming this line item was already checked.
+
+`trivy fs` also scanned `test/manifest.yaml` and `test/hello-world/`,
+surfacing the same `AVD-KSV-0056`/`AVD-KSV-0118` classes — these are
+pre-existing, intentionally broad (the RBAC there is explicitly scoped to
+what that fixture's own chart needs, per the comment at the top of
+`test/manifest.yaml`) and pose no more than a self-contained local test
+harness ever did (the outcomes described in the manifest are unaffected).
+
 ## Configuration (env vars)
 
 | Var | Default | Purpose |
