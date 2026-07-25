@@ -1,0 +1,9 @@
+# AVD-KSV-0056: deploy/deployment's default RBAC intentionally grants
+# create/update/delete on services/ingresses - this chart's ServiceAccount
+# installs arbitrary charts on a caller's behalf, and those charts create
+# exactly these resource kinds (see test/hello-world). Narrowing the
+# shipped default wouldn't fix anything; deploy/deployment/README.md's
+# Security section already tells operators to scope rbac.rules to what
+# they actually intend to serve, which is the real fix. See README.md's
+# Code quality section for the full reasoning.
+AVD-KSV-0056

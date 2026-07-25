@@ -343,6 +343,43 @@ what that fixture's own chart needs, per the comment at the top of
 `test/manifest.yaml`) and pose no more than a self-contained local test
 harness ever did (the outcomes described in the manifest are unaffected).
 
+## CI pipeline
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) runs on `push` to
+`main` or `dev` only. That single trigger covers all three cases it needs
+to: a direct commit to `dev`, a PR merged into `dev` (merging creates a
+push to the target branch), and a merge into `main` (same reasoning).
+Adding `pull_request` as a second trigger alongside `push` would double-run
+CI on every merge, since both events fire for it — so this is deliberately
+not a `pull_request` + `push` combination.
+
+Four independent jobs, each mirroring a check already established above:
+
+- **`go`** — `go build`, `go vet`, `gofmt -l` (fails on any unformatted
+  file), and `golangci-lint run` (see [Code quality](#code-quality)).
+  golangci-lint is installed via `go install` rather than
+  `golangci-lint-action`, so its binary is always built with the same Go
+  toolchain `actions/setup-go` just installed — golangci-lint refuses to
+  analyze code targeting a newer Go than it was built with, which is
+  exactly the failure mode this session hit locally before switching to
+  that install method.
+- **`helm`** — `helm lint` and `helm template` against
+  [`deploy/deployment`](deploy/deployment), plus `helm lint` against
+  [`test/hello-world`](test/hello-world).
+- **`trivy-fs`** — the dependency/IaC/secret scan from
+  [CVE / misconfiguration scanning](#cve--misconfiguration-scanning-trivy),
+  `--skip-dirs test` (those fixtures are intentionally out of scope, as
+  covered there) and `exit-code: 1` so it actually gates merges. The
+  already-triaged `AVD-KSV-0056` finding on `deploy/deployment`'s RBAC is
+  suppressed via [`.trivyignore`](.trivyignore), which documents why
+  inline rather than silently.
+- **`image`** — builds the real image with `./build.sh` and runs a Trivy
+  *image* scan against it (the OS/library layer), `exit-code: 1`. This is
+  the one job this repo's own sandboxed development sessions can't run
+  end-to-end (pulling `docker.io/library/golang` is blocked by that
+  environment's egress policy) - ordinary GitHub-hosted runners have no
+  such restriction.
+
 ## Configuration (env vars)
 
 | Var | Default | Purpose |
