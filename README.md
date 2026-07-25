@@ -252,6 +252,39 @@ port publishing NATs to the container's external interface, not into its
 loopback namespace, the same way a Kubernetes `Service` can't accidentally
 expose this port outside the pod either.
 
+## Code quality
+
+[`golangci-lint`](https://golangci-lint.run) (config: [`.golangci.yml`](.golangci.yml))
+is the linter for this repo, run as `golangci-lint run ./...`. It requires a
+build built with Go ≥ the version in [`go.mod`](go.mod) — `go install
+github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest` picks up
+whatever toolchain is on `PATH` (or set `GOTOOLCHAIN` explicitly) if your
+installed binary predates the module's Go version.
+
+Rather than the `all` preset (deliberately not meant for regular use —
+several of its linters actively fight idiomatic Go, e.g. banning the
+`if err := f(); err != nil` form used throughout this codebase, or
+demanding static sentinel errors for one-off validation messages returned
+verbatim to HTTP callers), the enabled set is deliberately small and
+targeted at what actually matters for this codebase:
+
+- `errcheck`, `govet`, `ineffassign`, `staticcheck`, `unused` — the
+  default set: unchecked errors, suspicious constructs, dead
+  assignments/code.
+- `gosec` — security-focused static analysis, given the project's whole
+  premise is a privileged, cluster-credentialed process; it currently
+  reports zero findings.
+- `revive` — general correctness/style (e.g. caught an unused `context.Context`
+  parameter inconsistent with the file's own convention elsewhere).
+- `gocritic` — caught a real bug: `os.Exit` after a `defer` in `main` meant
+  the deferred `signal.NotifyContext` cleanup would never run on either
+  exit path (fixed by extracting `run() int` so `os.Exit` only happens once,
+  after all defers have executed).
+- `modernize` — Go-version-aware suggestions; caught `omitempty` on a
+  `time.Time` field having no effect (structs are never "empty" to
+  `encoding/json`'s classic `omitempty`) — replaced with Go 1.24+'s
+  `omitzero`, which does honor `time.Time.IsZero()`.
+
 ## Configuration (env vars)
 
 | Var | Default | Purpose |

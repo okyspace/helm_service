@@ -26,7 +26,7 @@ type ReleaseView struct {
 	Notes        string    `json:"notes,omitempty"`
 	Manifest     string    `json:"manifest,omitempty"`
 	Chart        ChartView `json:"chart"`
-	LastDeployed time.Time `json:"lastDeployed,omitempty"`
+	LastDeployed time.Time `json:"lastDeployed,omitzero"`
 }
 
 func toReleaseView(rel *release.Release) ReleaseView {

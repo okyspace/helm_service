@@ -218,7 +218,7 @@ type UninstallResult struct {
 }
 
 // Uninstall runs `helm uninstall` via the SDK.
-func (r *Runner) Uninstall(ctx context.Context, req UninstallRequest) (*UninstallResult, error) {
+func (r *Runner) Uninstall(_ context.Context, req UninstallRequest) (*UninstallResult, error) {
 	cfg, err := r.newConfiguration(req.Namespace)
 	if err != nil {
 		return nil, err

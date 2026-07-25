@@ -28,6 +28,13 @@ const (
 )
 
 func main() {
+	os.Exit(run())
+}
+
+// run contains main's logic and returns the process exit code, so that
+// every deferred cleanup (notably signal.NotifyContext's stop func) always
+// runs before the process exits - os.Exit itself never runs a defer.
+func run() int {
 	log := slog.New(slog.NewJSONHandler(os.Stdout, nil))
 
 	// The bind address is never taken from an env var directly - only
@@ -48,7 +55,7 @@ func main() {
 		bindHost = "0.0.0.0"
 	default:
 		log.Error("invalid HELM_SIDECAR_MODE", "mode", mode, "want", []string{modeSidecar, modeDeployment})
-		os.Exit(1)
+		return 1
 	}
 
 	port := os.Getenv("HELM_SIDECAR_PORT")
@@ -66,7 +73,8 @@ func main() {
 	log.Info("helm sidecar starting", "mode", mode, "addr", addr)
 	if err := srv.ListenAndServe(ctx, addr); err != nil {
 		log.Error("helm sidecar exited", "error", err)
-		os.Exit(1)
+		return 1
 	}
 	log.Info("helm sidecar stopped")
+	return 0
 }
