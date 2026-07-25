@@ -53,12 +53,37 @@ rbac:
 # controller. See ../README.md#security.
 networkPolicy:
   enabled: false
-  # Only these selectors may open ingress connections to the Service port.
-  # Leaving both empty while enabled denies all ingress (safe default) -
-  # set podSelector and/or namespaceSelector to actually admit traffic.
+
+  # Ingress: who may call this Service. Leaving both selectors empty while
+  # enabled denies all ingress (safe default) - set podSelector and/or
+  # namespaceSelector to actually admit traffic. Setting both scopes to
+  # pods matching podSelector *within* namespaces matching namespaceSelector
+  # (AND, not OR - matches plain Kubernetes NetworkPolicy semantics for a
+  # single `from` peer). See deploy/deployment/README.md#security for
+  # worked examples.
   from:
     podSelector: {}
     namespaceSelector: {}
+
+  # Egress: what this pod itself may reach. Defaults allow DNS resolution
+  # and HTTPS to any destination, port-restricted only - this chart can't
+  # know your cluster's Kubernetes API server address/port or your OCI
+  # registry/chart repo endpoints in advance. Narrow individual rules with
+  # `to` (ipBlock/namespaceSelector/podSelector) once you know those
+  # endpoints, or set this to `[]` for a fully locked-down (deny all
+  # egress) install. See deploy/deployment/README.md#security for worked
+  # examples, including why the Kubernetes API server often needs its own
+  # rule (it's frequently outside the default HTTPS port, and sometimes
+  # outside the pod network entirely on managed clusters).
+  egress:
+    - ports:
+        - port: 53
+          protocol: UDP
+        - port: 53
+          protocol: TCP
+    - ports:
+        - port: 443
+          protocol: TCP
 
 podSecurityContext:
   runAsNonRoot: true
