@@ -1,0 +1,78 @@
+# Default values for the helm-sidecar deployment-mode chart.
+
+replicaCount: 1
+
+image:
+  # Same image as sidecar mode - see ../../build.sh / ../../Containerfile.
+  repository: helm-sidecar
+  tag: "latest"
+  pullPolicy: IfNotPresent
+
+# Must stay "deployment" for this chart: it's what makes the binary bind
+# 0.0.0.0 instead of 127.0.0.1, which is required for the Service below to
+# route to it at all. Do not override to "sidecar" here.
+mode: deployment
+
+service:
+  type: ClusterIP
+  port: 8080
+
+serviceAccount:
+  create: true
+  name: ""
+  annotations: {}
+
+# RBAC granted to the ServiceAccount above. Because this service accepts
+# install/upgrade/uninstall requests for arbitrary charts, its effective
+# permissions are the ceiling on what any caller that can reach it may do
+# to the cluster - keep `rules` as narrow as the charts you intend to serve
+# actually require. The defaults below cover Helm's own release-storage
+# Secrets plus the resource kinds used by test/hello-world.
+rbac:
+  create: true
+  # false (default): namespaced Role/RoleBinding in the release namespace.
+  # true: ClusterRole/ClusterRoleBinding, for a single instance managing
+  # releases across multiple namespaces.
+  clusterWide: false
+  rules:
+    - apiGroups: [""]
+      resources: ["secrets", "configmaps", "services", "persistentvolumeclaims", "serviceaccounts"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    - apiGroups: ["apps"]
+      resources: ["deployments"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+    - apiGroups: ["networking.k8s.io"]
+      resources: ["ingresses"]
+      verbs: ["get", "list", "watch", "create", "update", "patch", "delete"]
+
+# Unlike sidecar mode (structurally reachable only from pod-mates),
+# deployment mode is reachable by anything in the cluster that can route to
+# the Service above - the HTTP API itself has no caller authentication.
+# This NetworkPolicy is the recommended way to close that gap; disabled by
+# default so the chart installs cleanly on clusters without a NetworkPolicy
+# controller. See ../README.md#security.
+networkPolicy:
+  enabled: false
+  # Only these selectors may open ingress connections to the Service port.
+  # Leaving both empty while enabled denies all ingress (safe default) -
+  # set podSelector and/or namespaceSelector to actually admit traffic.
+  from:
+    podSelector: {}
+    namespaceSelector: {}
+
+podSecurityContext: {}
+
+securityContext:
+  runAsNonRoot: true
+  readOnlyRootFilesystem: true
+  allowPrivilegeEscalation: false
+  capabilities:
+    drop: ["ALL"]
+
+resources: {}
+
+extraEnv: []
+
+nodeSelector: {}
+tolerations: []
+affinity: {}

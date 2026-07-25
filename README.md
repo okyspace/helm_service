@@ -1,14 +1,23 @@
 # Helm Sidecar
 
-A Kubernetes sidecar that gives another container in the same pod the
-ability to run Helm install/upgrade/uninstall/status/template/lint —
-**without a shell, a `helm` binary, or a subprocess anywhere in the path**.
+A Kubernetes service that gives another workload the ability to run Helm
+install/upgrade/uninstall/status/template/lint — **without a shell, a
+`helm` binary, or a subprocess anywhere in the path**.
 
 It links the [Helm v4 Go SDK](https://pkg.go.dev/helm.sh/helm/v4/pkg/action)
-directly and exposes it as an HTTP/JSON API over loopback TCP
-(`127.0.0.1:8080`). The calling container talks to that port; nothing on
-either side ever builds a command line or execs a process, so there is no
-command-injection surface between the two containers.
+directly and exposes it as an HTTP/JSON API over TCP. Nothing on either
+side ever builds a command line or execs a process, so there is no
+command-injection surface between caller and callee.
+
+The same image runs in two modes, chosen by `HELM_SIDECAR_MODE`:
+
+| Mode | `HELM_SIDECAR_MODE` | Binds | Runs as |
+|---|---|---|---|
+| **sidecar** (default) | `sidecar` | `127.0.0.1:8080` | a second container in *your* pod |
+| **deployment** | `deployment` | `0.0.0.0:8080` | its own standalone Deployment, fronted by a Service |
+
+See [`deploy/`](deploy/) for mode-specific docs, examples, and — for
+deployment mode — a Helm chart.
 
 ## Versions
 
@@ -38,6 +47,8 @@ Current built image: **~63 MB**, no shell, no package manager, runs as
 
 ## How it works
 
+Sidecar mode (default):
+
 ```
 ┌─────────────────────── pod (one network namespace) ───────────────┐
 │  ┌─────────────────┐                    ┌────────────────────┐    │
@@ -47,45 +58,78 @@ Current built image: **~63 MB**, no shell, no package manager, runs as
 └─────────────────────────────────────────────────────────────────┘
 ```
 
+Deployment mode (`HELM_SIDECAR_MODE=deployment`):
+
+```
+caller pod(s), any namespace
+        │  HTTP/JSON
+        ▼
+helm-sidecar Service (ClusterIP:8080)
+        │
+        ▼
+helm-sidecar Deployment pod, listening 0.0.0.0:8080
+```
+
 - `internal/helmrunner` wraps `action.Install` / `action.Upgrade` /
   `action.Uninstall` / `action.Status` / `action.NewInstall` (dry-run, for
   `template`) / `action.NewLint`. Every request builds its own
   `action.Configuration` and `genericclioptions.RESTClientGetter`, so
   concurrent requests targeting different namespaces can't race on shared
-  state.
+  state. This layer is identical in both modes.
 - `internal/api` is a plain `net/http` server (stdlib only — no gRPC, no
-  third-party HTTP framework) bound to `127.0.0.1:8080` — never `0.0.0.0`;
-  see [Security: TCP vs Unix socket](#security-tcp-vs-unix-socket) below.
-  Requests are strict JSON (`DisallowUnknownFields`), capped at 1 MiB,
-  release/namespace names are validated against the Kubernetes DNS-1123
-  pattern before touching the SDK.
+  third-party HTTP framework). Requests are strict JSON
+  (`DisallowUnknownFields`), capped at 1 MiB, release/namespace names are
+  validated against the Kubernetes DNS-1123 pattern before touching the
+  SDK. This layer is also identical in both modes — only the bind address
+  it's handed differs, see [Security: modes and bind address](#security-modes-and-bind-address)
+  below.
 - Kubernetes auth is whatever the pod's ServiceAccount provides (in-cluster
   config, the standard client-go fallback) unless `KUBECONFIG` is set.
 
-## Security: TCP vs Unix socket
+## Folder structure
+
+```
+cmd/, internal/, Containerfile, build.sh, go.mod   common to both modes:
+                                                    one Go binary, one image
+deploy/
+  sidecar/       sidecar-mode docs + example pod fragment (no chart: the
+                 container is added directly to your own pod spec)
+  deployment/    deployment-mode Helm chart (Chart.yaml, values.yaml,
+                 templates/) that installs helm-sidecar as its own
+                 Deployment + Service
+test/            end-to-end harness exercising the API (sidecar mode)
+                 against test/hello-world, a throwaway chart used only as
+                 test fixture data — unrelated to deploy/deployment's chart
+```
+
+## Security: modes and bind address
 
 This started as a Unix domain socket on a shared `emptyDir`, then was
-switched to loopback TCP. Both are pod-local only — nothing outside the
-pod can reach either — but the access-control model differs:
+switched to loopback TCP, and now optionally to a pod-network bind for
+deployment mode. The bind address is never taken from an arbitrary env
+var — `HELM_SIDECAR_MODE` selects between exactly two hardcoded addresses
+in [`cmd/helmsidecar/main.go`](cmd/helmsidecar/main.go), so a stray env var
+can't widen it to something unintended.
 
-- **Unix socket** (the original design): reachable only by containers that
-  explicitly mount the volume holding the socket file, and further gated
-  by the socket's file permission bits (`0660` + matching `runAsGroup`/
-  `fsGroup`). A container with no reason to talk to Helm, and no volume
-  mount for it, structurally cannot reach it.
-- **Loopback TCP** (current): every container in the pod shares one
-  network namespace, so `127.0.0.1:8080` is reachable by *any* container in
-  the pod — including anything added later (a service-mesh sidecar, a
-  `kubectl debug` ephemeral container) — with no extra configuration. In
-  exchange, there's no shared-volume/permission-bit plumbing to get wrong,
-  which was the main friction of the socket approach outside Kubernetes
-  (plain `docker run` has no `fsGroup` equivalent).
-
-Both approaches are inherently safe against exposure *outside the pod*:
-the socket has no network representation at all, and this code binds TCP
-to `127.0.0.1` specifically (hardcoded as the bind address in
-[`cmd/helmsidecar/main.go`](cmd/helmsidecar/main.go) — only the port is
-configurable) so it can't be widened to `0.0.0.0` by a stray env var.
+- **Unix socket** (an earlier design, no longer used): reachable only by
+  containers that explicitly mount the volume holding the socket file, and
+  further gated by the socket's file permission bits (`0660` + matching
+  `runAsGroup`/`fsGroup`). A container with no reason to talk to Helm, and
+  no volume mount for it, structurally cannot reach it.
+- **Sidecar mode** (`127.0.0.1`, default): every container in the pod
+  shares one network namespace, so the port is reachable by *any* container
+  in the pod — including anything added later (a service-mesh sidecar, a
+  `kubectl debug` ephemeral container) — with no extra configuration, but
+  nothing *outside* the pod can reach it. In exchange, there's no
+  shared-volume/permission-bit plumbing to get wrong, which was the main
+  friction of the socket approach outside Kubernetes (plain `docker run`
+  has no `fsGroup` equivalent).
+- **Deployment mode** (`0.0.0.0`): gives up the pod-local guarantee
+  entirely — the port is reachable by anything in the cluster that can
+  route to the fronting Service, and the HTTP API itself does not
+  authenticate callers. RBAC on the ServiceAccount and, ideally, a
+  `NetworkPolicy` restricting who may reach the Service are what bound the
+  blast radius here — see [`deploy/deployment/README.md#security`](deploy/deployment/README.md#security).
 
 ## Building
 
@@ -102,39 +146,26 @@ Env vars `build.sh` reads: `REGISTRY`, `IMAGE_NAME` (default
 
 ## Deploying
 
-The sidecar needs:
+Both modes need a ServiceAccount with RBAC in whatever namespaces it will
+manage — at minimum, read/write on `secrets` (Helm's default release
+storage driver) plus whatever permissions the charts it installs actually
+need. Beyond that, the two modes differ:
 
-1. Any container in the pod can reach `127.0.0.1:8080` as soon as the
-   sidecar is up.
-2. **A ServiceAccount with RBAC** in whatever namespaces it will manage —
-   at minimum, read/write on `secrets` (Helm's default release storage
-   driver) plus whatever permissions the charts it installs actually need.
-
-Minimal pod fragment:
-
-```yaml
-spec:
-  serviceAccountName: helm-sidecar-sa
-  containers:
-    - name: app
-      image: your-app:latest
-      env:
-        - { name: HELM_SIDECAR_URL, value: "http://127.0.0.1:8080" }
-    - name: helm-sidecar
-      image: helm-sidecar:latest
-      ports:
-        - { containerPort: 8080 }
-      securityContext:
-        runAsNonRoot: true
-        readOnlyRootFilesystem: true
-        allowPrivilegeEscalation: false
-```
+- **Sidecar** — add the container directly to your existing pod spec; see
+  [`deploy/sidecar/README.md`](deploy/sidecar/README.md) and
+  [`deploy/sidecar/examples/pod.yaml`](deploy/sidecar/examples/pod.yaml).
+- **Deployment** — install the chart at
+  [`deploy/deployment/`](deploy/deployment/README.md), e.g.
+  `helm install helm-sidecar ./deploy/deployment`.
 
 ## Using the API
 
-All endpoints are POST with a JSON body, except `GET /healthz`. Examples
-below assume the calling container reaches the sidecar at
-`http://127.0.0.1:8080` (the pod-shared loopback address).
+All endpoints are POST with a JSON body, except `GET /healthz`. The API
+itself is identical in both modes; only the address differs. Examples
+below assume sidecar mode, i.e. the calling container reaches
+helm-sidecar at `http://127.0.0.1:8080` (the pod-shared loopback address).
+In deployment mode, replace that with the Service's cluster-DNS name, e.g.
+`http://helm-sidecar.helm-sidecar.svc.cluster.local:8080`.
 
 ```bash
 # health check
@@ -225,7 +256,8 @@ expose this port outside the pod either.
 
 | Var | Default | Purpose |
 |---|---|---|
-| `HELM_SIDECAR_PORT` | `8080` | Port the API listens on. The bind address is always `127.0.0.1`, hardcoded — not configurable via env var. |
+| `HELM_SIDECAR_MODE` | `sidecar` | `sidecar` binds `127.0.0.1`; `deployment` binds `0.0.0.0`. Any other value is a fatal startup error — there is no way to set an arbitrary bind address via env var. |
+| `HELM_SIDECAR_PORT` | `8080` | Port the API listens on. |
 | `KUBECONFIG` | unset (in-cluster config) | Only needed outside a cluster, e.g. local testing |
 | `HELM_REGISTRY_CONFIG`, `HELM_REPOSITORY_CONFIG`, `HELM_REPOSITORY_CACHE` | Helm defaults under `$HOME` | Only relevant if you use `helm repo`-style chart refs or OCI registry login state; `$HOME` for the `nonroot` user is `/home/nonroot`, which is **not** guaranteed writable under `readOnlyRootFilesystem: true`. If you need repo/OCI caching under a read-only root, mount a small `emptyDir` there or point these vars at the shared volume. |
 
