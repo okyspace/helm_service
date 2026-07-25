@@ -1,0 +1,41 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "helm-sidecar.fullname" . }}
+  labels:
+    {{- include "helm-sidecar.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels:
+      {{- include "helm-sidecar.selectorLabels" . | nindent 6 }}
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    - from:
+      {{- if or .Values.networkPolicy.from.podSelector .Values.networkPolicy.from.namespaceSelector }}
+        - {{- with .Values.networkPolicy.from.podSelector }}
+          podSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+          {{- with .Values.networkPolicy.from.namespaceSelector }}
+          namespaceSelector:
+            {{- toYaml . | nindent 12 }}
+          {{- end }}
+      {{- else }}
+        # No selector configured: an explicit empty list denies all
+        # ingress, unlike an absent/null "from" which Kubernetes treats as
+        # "no restriction" (allow all). Set networkPolicy.from.podSelector
+        # and/or .namespaceSelector to actually admit traffic. Setting
+        # both above lands them in the single peer entry here, which is
+        # AND semantics (this pod label, in this namespace) - not two
+        # separate OR'd entries.
+        []
+      {{- end }}
+      ports:
+        - port: http
+          protocol: TCP
+  egress:
+    {{- toYaml .Values.networkPolicy.egress | nindent 4 }}
+{{- end }}

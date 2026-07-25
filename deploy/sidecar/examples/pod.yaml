@@ -1,0 +1,38 @@
+# Example: helm-sidecar running as a second container in an existing pod
+# (sidecar mode - the default, HELM_SIDECAR_MODE unset or "sidecar").
+#
+# The sidecar binds 127.0.0.1:8080 only, so it is reachable exclusively by
+# other containers in this same pod - see ../README.md.
+apiVersion: v1
+kind: Pod
+metadata:
+  name: your-app
+spec:
+  serviceAccountName: helm-sidecar-sa
+  securityContext:
+    runAsNonRoot: true
+    seccompProfile: { type: RuntimeDefault }
+  containers:
+    - name: app
+      image: your-app:latest
+      env:
+        - { name: HELM_SIDECAR_URL, value: "http://127.0.0.1:8080" }
+      # Baseline for a well-behaved image; relax per your actual app's
+      # needs (e.g. drop readOnlyRootFilesystem, or add a volume mount for
+      # paths it writes to, if it isn't built to run this way).
+      securityContext:
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false
+    - name: helm-sidecar
+      image: helm-sidecar:latest
+      # HELM_SIDECAR_MODE defaults to "sidecar"; set it explicitly if you
+      # want the pod spec to be self-documenting.
+      env:
+        - { name: HELM_SIDECAR_MODE, value: "sidecar" }
+      ports:
+        - { containerPort: 8080 }
+      securityContext:
+        runAsNonRoot: true
+        readOnlyRootFilesystem: true
+        allowPrivilegeEscalation: false

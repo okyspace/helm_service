@@ -1,0 +1,9 @@
+apiVersion: v2
+name: helm-sidecar
+description: >-
+  Deploys helm-sidecar as its own standalone Deployment + Service
+  (HELM_SIDECAR_MODE=deployment), for callers outside its pod to reach it
+  as a shared Helm-over-HTTP service instead of a per-pod sidecar.
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

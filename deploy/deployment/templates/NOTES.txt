@@ -1,0 +1,15 @@
+helm-sidecar is running in deployment mode in namespace {{ .Release.Namespace }}.
+
+Reach it from anywhere in the cluster at:
+  http://{{ include "helm-sidecar.fullname" . }}.{{ .Release.Namespace }}.svc.cluster.local:{{ .Values.service.port }}
+
+Unlike sidecar mode, this endpoint has no caller authentication of its own
+- reachability is controlled entirely by Kubernetes networking. If you
+have not set networkPolicy.enabled=true (with from.podSelector and/or
+from.namespaceSelector configured), anything in the cluster that can route
+to this Service can install/upgrade/uninstall via it. See
+deploy/deployment/README.md#security.
+
+Quick check:
+  kubectl -n {{ .Release.Namespace }} port-forward svc/{{ include "helm-sidecar.fullname" . }} 8080:{{ .Values.service.port }}
+  curl http://127.0.0.1:8080/healthz

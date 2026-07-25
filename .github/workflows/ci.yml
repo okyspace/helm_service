@@ -1,0 +1,107 @@
+name: CI
+
+# A push to main or dev covers all three trigger conditions asked for:
+# a direct commit to dev, a PR merged into dev (merging creates a push to
+# dev), and a merge into main (same reasoning). Using `pull_request` as a
+# second trigger alongside this would double-run CI for the same merge
+# (both events fire), so push-only is deliberate, not an omission.
+on:
+  push:
+    branches:
+      - main
+      - dev
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  GO_VERSION_FILE: go.mod
+
+jobs:
+  go:
+    name: Go build, vet, format, lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: actions/setup-go@v7
+        with:
+          go-version-file: ${{ env.GO_VERSION_FILE }}
+
+      - name: go build
+        run: go build ./...
+
+      - name: go vet
+        run: go vet ./...
+
+      - name: gofmt
+        run: |
+          unformatted=$(gofmt -l .)
+          if [ -n "$unformatted" ]; then
+            echo "::error::gofmt found unformatted files:"
+            echo "$unformatted"
+            exit 1
+          fi
+
+      - name: golangci-lint
+        # Installed via `go install` (config: .golangci.yml) rather than
+        # golangci-lint-action, so the binary is always built with the
+        # same toolchain as go-version-file above - golangci-lint refuses
+        # to analyze code that targets a newer Go than it was built with.
+        run: |
+          GOBIN="$RUNNER_TEMP/gobin" go install github.com/golangci/golangci-lint/v2/cmd/golangci-lint@latest
+          "$RUNNER_TEMP/gobin/golangci-lint" run ./...
+
+  helm:
+    name: Helm lint and template
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - uses: azure/setup-helm@v5
+
+      - name: helm lint deploy/deployment
+        run: helm lint deploy/deployment
+
+      - name: helm template (default values render cleanly)
+        run: helm template deploy/deployment >/dev/null
+
+      - name: helm lint test/hello-world
+        run: helm lint test/hello-world
+
+  trivy-fs:
+    name: Trivy dependency / IaC / secret scan
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Trivy fs scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: fs
+          scan-ref: .
+          scanners: vuln,misconfig,secret
+          severity: HIGH,CRITICAL
+          # test/ holds intentionally-scoped test fixtures (see
+          # README#code-quality) that aren't shipped to users; excluded
+          # here so this gate reflects what's actually deployed.
+          skip-dirs: test
+          exit-code: "1"
+
+  image:
+    name: Build image and scan with Trivy
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+
+      - name: Build image
+        run: TAG=ci ./build.sh
+
+      - name: Trivy image scan
+        uses: aquasecurity/trivy-action@v0.36.0
+        with:
+          scan-type: image
+          image-ref: helm-sidecar:ci
+          severity: HIGH,CRITICAL
+          exit-code: "1"
