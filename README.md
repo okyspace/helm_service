@@ -216,6 +216,22 @@ curl -X POST -H 'Content-Type: application/json' \
   -d '{"releaseName":"myapp","namespace":"myapp-ns"}' \
   http://127.0.0.1:8080/v1/status
 
+# list (releases in one namespace, or all with "allNamespaces": true)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"namespace":"myapp-ns"}' \
+  http://127.0.0.1:8080/v1/list
+
+# history (every revision of a release, not just the current one - see status for that)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"releaseName":"myapp","namespace":"myapp-ns"}' \
+  http://127.0.0.1:8080/v1/history
+
+# rollback ("revision":0, the default, rolls back to the previous release,
+# matching `helm rollback` with no revision argument)
+curl -X POST -H 'Content-Type: application/json' \
+  -d '{"releaseName":"myapp","namespace":"myapp-ns","revision":1}' \
+  http://127.0.0.1:8080/v1/rollback
+
 # uninstall
 curl -X POST -H 'Content-Type: application/json' \
   -d '{"releaseName":"myapp","namespace":"myapp-ns"}' \
@@ -233,9 +249,13 @@ curl -X POST -H 'Content-Type: application/json' \
 ```
 
 Install/upgrade/status responses are a trimmed `ReleaseView` (name,
-namespace, revision, status, notes, manifest, chart name/version) — see
-[`internal/api/types.go`](internal/api/types.go). Full request field
-reference is the `*Request` structs in
+namespace, revision, status, notes, manifest, chart name/version); list and
+history return a JSON array of the same — see
+[`internal/api/types.go`](internal/api/types.go). Rollback returns a small
+`RollbackResult` (name, namespace, revision) rather than a `ReleaseView`,
+since the SDK's rollback action doesn't return the resulting release
+itself — call status afterward for that. Full request field reference is
+the `*Request` structs in
 [`internal/helmrunner/runner.go`](internal/helmrunner/runner.go).
 
 ## Testing
@@ -272,6 +292,38 @@ that's expected, and confirms the loopback bind is doing its job: Docker's
 port publishing NATs to the container's external interface, not into its
 loopback namespace, the same way a Kubernetes `Service` can't accidentally
 expose this port outside the pod either.
+
+### Full lifecycle test: install, upgrade, list, history, rollback
+
+[`test/lifecycle.sh`](test/lifecycle.sh) drives a complete release
+lifecycle through the API — install, list, upgrade (with
+[`test/override.yaml`](test/override.yaml)'s values), history, rollback,
+then status to confirm the rollback actually took — and fails loudly on
+any unexpected response or revision number. It's mode-agnostic (same API
+either way); [`test/sidecar-lifecycle.sh`](test/sidecar-lifecycle.sh) and
+[`test/deployment-lifecycle.sh`](test/deployment-lifecycle.sh) each do the
+mode-specific setup (a bare pod reached via `kubectl port-forward` against
+the pod itself for sidecar mode, since port-forward reaches loopback-bound
+ports; `helm install ./deploy/deployment` reached via port-forward against
+its Service for deployment mode) and then call it:
+
+```bash
+cd test
+./sidecar-lifecycle.sh        # HELM_SIDECAR_MODE=sidecar, bare test pod
+./deployment-lifecycle.sh     # HELM_SIDECAR_MODE=deployment, via deploy/deployment chart
+```
+
+Both need a real reachable cluster (`kubectl` context already set) with
+the `helm-sidecar` image loaded into it — same requirement `build.sh` and
+the rest of this section already have, see the minikube/kind notes above.
+Since neither the sidecar image nor the running server here can read a
+chart off the *test runner's* filesystem (distroless, no shell, and in
+deployment mode no shared pod to copy from either),
+[`test/serve-chart.sh`](test/serve-chart.sh) packages
+[`test/hello-world`](test/hello-world) and serves it over plain HTTP from
+a throwaway in-cluster pod, then both lifecycle scripts pass that URL as
+the chart ref — exactly the same `http(s)://.../chart.tgz` mechanism a
+real chart repository would use, not a test-only code path.
 
 ## Code quality
 

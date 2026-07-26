@@ -52,6 +52,14 @@ func toReleaseView(rel *release.Release) ReleaseView {
 	return v
 }
 
+func toReleaseViews(rels []*release.Release) []ReleaseView {
+	views := make([]ReleaseView, 0, len(rels))
+	for _, rel := range rels {
+		views = append(views, toReleaseView(rel))
+	}
+	return views
+}
+
 // errorResponse is the JSON body written for any non-2xx response.
 type errorResponse struct {
 	Error string `json:"error"`
