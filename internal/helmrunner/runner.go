@@ -95,6 +95,21 @@ func asRelease(v any) (*release.Release, error) {
 	return rel, nil
 }
 
+// asReleases converts a slice of Helm SDK Releaser values (helm.sh/helm/v4's
+// action.List and action.History both return their own named `any`-backed
+// Releaser type, not a plain []any, hence the generic parameter here).
+func asReleases[T any](items []T) ([]*release.Release, error) {
+	rels := make([]*release.Release, 0, len(items))
+	for _, item := range items {
+		rel, err := asRelease(item)
+		if err != nil {
+			return nil, err
+		}
+		rels = append(rels, rel)
+	}
+	return rels, nil
+}
+
 // InstallRequest describes a `helm install` invocation.
 type InstallRequest struct {
 	ChartRef
@@ -265,6 +280,93 @@ func (r *Runner) Status(_ context.Context, req StatusRequest) (*release.Release,
 		return nil, err
 	}
 	return asRelease(rel)
+}
+
+// ListRequest describes a `helm list` invocation.
+type ListRequest struct {
+	Namespace     string `json:"namespace,omitempty"`
+	AllNamespaces bool   `json:"allNamespaces,omitempty"`
+	All           bool   `json:"all,omitempty"` // include non-deployed releases (uninstalled, failed, etc.)
+}
+
+// List runs `helm list` via the SDK.
+func (r *Runner) List(req ListRequest) ([]*release.Release, error) {
+	cfg, err := r.newConfiguration(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	client := action.NewList(cfg)
+	client.All = req.All
+	client.AllNamespaces = req.AllNamespaces
+
+	items, err := client.Run()
+	if err != nil {
+		return nil, fmt.Errorf("list: %w", err)
+	}
+	return asReleases(items)
+}
+
+// HistoryRequest describes a `helm history` invocation.
+type HistoryRequest struct {
+	ReleaseName string `json:"releaseName"`
+	Namespace   string `json:"namespace"`
+	Max         int    `json:"max,omitempty"`
+}
+
+// History runs `helm history` via the SDK.
+func (r *Runner) History(req HistoryRequest) ([]*release.Release, error) {
+	cfg, err := r.newConfiguration(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	client := action.NewHistory(cfg)
+	if req.Max > 0 {
+		client.Max = req.Max
+	}
+
+	items, err := client.Run(req.ReleaseName)
+	if err != nil {
+		return nil, fmt.Errorf("history: %w", err)
+	}
+	return asReleases(items)
+}
+
+// RollbackRequest describes a `helm rollback` invocation.
+type RollbackRequest struct {
+	ReleaseName string        `json:"releaseName"`
+	Namespace   string        `json:"namespace"`
+	Revision    int           `json:"revision,omitempty"` // 0 rolls back to the previous release, matching `helm rollback` with no revision argument
+	Wait        bool          `json:"wait,omitempty"`
+	Timeout     time.Duration `json:"timeout,omitempty"`
+}
+
+// RollbackResult reports what the release was rolled back to.
+type RollbackResult struct {
+	ReleaseName string `json:"releaseName"`
+	Namespace   string `json:"namespace"`
+	Revision    int    `json:"revision,omitempty"`
+}
+
+// Rollback runs `helm rollback` via the SDK. Unlike Install/Upgrade/Status,
+// the SDK's Rollback action does not return the resulting release - callers
+// that need the post-rollback release view should follow up with Status.
+func (r *Runner) Rollback(req RollbackRequest) (*RollbackResult, error) {
+	cfg, err := r.newConfiguration(req.Namespace)
+	if err != nil {
+		return nil, err
+	}
+
+	client := action.NewRollback(cfg)
+	client.Version = req.Revision
+	client.Timeout = timeoutOrDefault(req.Timeout)
+	client.WaitStrategy = waitStrategy(req.Wait)
+
+	if err := client.Run(req.ReleaseName); err != nil {
+		return nil, fmt.Errorf("rollback: %w", err)
+	}
+	return &RollbackResult{ReleaseName: req.ReleaseName, Namespace: req.Namespace, Revision: req.Revision}, nil
 }
 
 // TemplateRequest describes a `helm template` invocation. It never contacts

@@ -1,0 +1,6 @@
+{
+  "replicaCount": 2,
+  "configMap": {
+    "message": "Hello, Upgraded World!"
+  }
+}

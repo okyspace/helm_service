@@ -62,6 +62,9 @@ func New(runner *helmrunner.Runner, log *slog.Logger, version string) *Server {
 	mux.HandleFunc("POST /v1/upgrade", s.handleUpgrade)
 	mux.HandleFunc("POST /v1/uninstall", s.handleUninstall)
 	mux.HandleFunc("POST /v1/status", s.handleStatus)
+	mux.HandleFunc("POST /v1/list", s.handleList)
+	mux.HandleFunc("POST /v1/history", s.handleHistory)
+	mux.HandleFunc("POST /v1/rollback", s.handleRollback)
 	mux.HandleFunc("POST /v1/template", s.handleTemplate)
 	mux.HandleFunc("POST /v1/lint", s.handleLint)
 
@@ -254,6 +257,67 @@ func (s *Server) handleStatus(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, toReleaseView(rel))
+}
+
+func (s *Server) handleList(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[helmrunner.ListRequest](w, r)
+	if !ok {
+		return
+	}
+
+	rels, err := s.runner.List(req)
+	if err != nil {
+		writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toReleaseViews(rels))
+}
+
+func (s *Server) handleHistory(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[helmrunner.HistoryRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := errors.Join(
+		nonEmpty("releaseName", req.ReleaseName),
+		nonEmpty("namespace", req.Namespace),
+		validName("releaseName", req.ReleaseName),
+		validName("namespace", req.Namespace),
+	); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	rels, err := s.runner.History(req)
+	if err != nil {
+		writeError(w, http.StatusNotFound, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, toReleaseViews(rels))
+}
+
+func (s *Server) handleRollback(w http.ResponseWriter, r *http.Request) {
+	req, ok := decode[helmrunner.RollbackRequest](w, r)
+	if !ok {
+		return
+	}
+	if err := errors.Join(
+		nonEmpty("releaseName", req.ReleaseName),
+		nonEmpty("namespace", req.Namespace),
+		validName("releaseName", req.ReleaseName),
+		validName("namespace", req.Namespace),
+	); err != nil {
+		writeError(w, http.StatusBadRequest, err)
+		return
+	}
+
+	res, err := s.runner.Rollback(req)
+	if err != nil {
+		s.log.Error("rollback failed", "release", req.ReleaseName, "namespace", req.Namespace, "error", err)
+		writeError(w, http.StatusUnprocessableEntity, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, res)
 }
 
 func (s *Server) handleTemplate(w http.ResponseWriter, r *http.Request) {
