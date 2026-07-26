@@ -56,3 +56,8 @@ func toReleaseView(rel *release.Release) ReleaseView {
 type errorResponse struct {
 	Error string `json:"error"`
 }
+
+// versionResponse is the JSON body returned by GET /version.
+type versionResponse struct {
+	Version string `json:"version"`
+}

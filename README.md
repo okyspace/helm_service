@@ -1,4 +1,4 @@
-# Helm Sidecar
+# Helm Service
 
 A Kubernetes service that gives another workload the ability to run Helm
 install/upgrade/uninstall/status/template/lint — **without a shell, a
@@ -30,6 +30,18 @@ deployment mode — a Helm chart.
 
 Current built image: **~63 MB**, no shell, no package manager, runs as
 `nonroot:nonroot` (uid/gid 65532).
+
+This project's own release version (distinct from the dependency versions
+above) lives in [`VERSION`](VERSION) - a single semver line, currently
+`0.1.0`. `build.sh` reads it for two things: the image's default tag (still
+overridable via `TAG=...`), and the `VERSION` build-arg baked into the
+binary via `-ldflags -X main.version=...` (see [`Containerfile`](Containerfile)),
+which the running binary reports at startup (in its JSON log line) and via
+`GET /version` (see [Using the API](#using-the-api)). A plain `go build`
+outside that pipeline leaves it at the fallback `"dev"`. Bump `VERSION`
+together with [`deploy/deployment/Chart.yaml`](deploy/deployment/Chart.yaml)'s
+`version`/`appVersion` and [`values.yaml`](deploy/deployment/values.yaml)'s
+`image.tag`, which default to the same value.
 
 ## Why Helm v4, and why distroless/static
 
@@ -135,14 +147,20 @@ can't widen it to something unintended.
 
 ```bash
 cd installers/helm
-./build.sh                       # -> helm-sidecar:latest
+./build.sh                       # -> helm-sidecar:<contents of VERSION>
 REGISTRY=harbor.local/ainexushub TAG=v1.0.0 PUSH=true ./build.sh
 SCAN=true ./build.sh             # also runs `trivy image` if installed
+BUILDER=docker ./build.sh        # force docker over podman if both are present
 ```
 
 Env vars `build.sh` reads: `REGISTRY`, `IMAGE_NAME` (default
-`helm-sidecar`), `TAG` (default `latest`), `GO_VERSION` (default `1.26`),
-`PUSH`, `SCAN`.
+`helm-sidecar`), `TAG` (default: contents of [`VERSION`](VERSION)),
+`GO_VERSION` (default `1.26`), `BUILDER` (default: `podman` if installed,
+else `docker`), `PUSH`, `SCAN`. Regardless of `BUILDER`/`TAG`, the binary
+itself always gets built with the real `VERSION` file contents baked in
+via `-ldflags -X main.version=...` (see [Versions](#versions) above) - the
+two are independent so a CI run tagging the image `:ci` still reports its
+real semver at `/version`.
 
 ## Deploying
 
@@ -160,16 +178,19 @@ need. Beyond that, the two modes differ:
 
 ## Using the API
 
-All endpoints are POST with a JSON body, except `GET /healthz`. The API
-itself is identical in both modes; only the address differs. Examples
-below assume sidecar mode, i.e. the calling container reaches
-helm-sidecar at `http://127.0.0.1:8080` (the pod-shared loopback address).
-In deployment mode, replace that with the Service's cluster-DNS name, e.g.
-`http://helm-sidecar.helm-sidecar.svc.cluster.local:8080`.
+All endpoints are POST with a JSON body, except `GET /healthz` and
+`GET /version`. The API itself is identical in both modes; only the
+address differs. Examples below assume sidecar mode, i.e. the calling
+container reaches helm-sidecar at `http://127.0.0.1:8080` (the pod-shared
+loopback address). In deployment mode, replace that with the Service's
+cluster-DNS name, e.g. `http://helm-sidecar.helm-sidecar.svc.cluster.local:8080`.
 
 ```bash
 # health check
 curl http://127.0.0.1:8080/healthz
+
+# what's actually running (see VERSION and Versions above)
+curl http://127.0.0.1:8080/version   # {"version":"0.1.0"}
 
 # install
 curl -X POST -H 'Content-Type: application/json' \
@@ -373,12 +394,21 @@ Four independent jobs, each mirroring a check already established above:
   already-triaged `AVD-KSV-0056` finding on `deploy/deployment`'s RBAC is
   suppressed via [`.trivyignore`](.trivyignore), which documents why
   inline rather than silently.
-- **`image`** — builds the real image with `./build.sh` and runs a Trivy
-  *image* scan against it (the OS/library layer), `exit-code: 1`. This is
-  the one job this repo's own sandboxed development sessions can't run
-  end-to-end (pulling `docker.io/library/golang` is blocked by that
-  environment's egress policy) - ordinary GitHub-hosted runners have no
-  such restriction.
+- **`image`** — builds the real image with `BUILDER=docker ./build.sh`
+  and runs a Trivy *image* scan against it (the OS/library layer),
+  `exit-code: 1`. `BUILDER=docker` is forced deliberately:
+  `ubuntu-latest` runners ship both `docker` and `podman`, and `build.sh`
+  prefers `podman` when present, which leaves the image in podman's local
+  storage - `trivy-action`'s image scan checks `docker` first and doesn't
+  find it there (its podman lookup needs a running podman *socket*, not
+  just the CLI store), then fails every other lookup and finally tries
+  (and fails) to pull `helm-sidecar:ci` from Docker Hub. First version of
+  this job hit exactly that and reported as a CI failure with no real
+  CVE behind it - fixed by making `BUILDER` overridable in `build.sh` and
+  forcing it here. This is also the one job this repo's own sandboxed
+  development sessions can't run end-to-end (pulling
+  `docker.io/library/golang` is blocked by that environment's egress
+  policy) - ordinary GitHub-hosted runners have no such restriction.
 
 ## Configuration (env vars)
 
@@ -422,3 +452,7 @@ instead of always-latest-patched.
 **Verifying an upgrade**: `./build.sh` builds the real multi-stage image;
 there's no separate "quick check" — a successful `docker build` already
 runs `go build` against the pinned versions inside the container.
+
+## License
+
+[MIT](LICENSE).

@@ -42,20 +42,22 @@ var dns1123 = regexp.MustCompile(`^[a-z0-9]([a-z0-9-]{0,251}[a-z0-9])?$`)
 
 // Server serves the sidecar's HTTP/JSON API over TCP on loopback.
 type Server struct {
-	runner *helmrunner.Runner
-	log    *slog.Logger
-	http   *http.Server
+	runner  *helmrunner.Runner
+	log     *slog.Logger
+	version string
+	http    *http.Server
 }
 
 // New builds a Server. log may be nil, in which case slog.Default() is used.
-func New(runner *helmrunner.Runner, log *slog.Logger) *Server {
+func New(runner *helmrunner.Runner, log *slog.Logger, version string) *Server {
 	if log == nil {
 		log = slog.Default()
 	}
-	s := &Server{runner: runner, log: log}
+	s := &Server{runner: runner, log: log, version: version}
 
 	mux := http.NewServeMux()
 	mux.HandleFunc("GET /healthz", s.handleHealthz)
+	mux.HandleFunc("GET /version", s.handleVersion)
 	mux.HandleFunc("POST /v1/install", s.handleInstall)
 	mux.HandleFunc("POST /v1/upgrade", s.handleUpgrade)
 	mux.HandleFunc("POST /v1/uninstall", s.handleUninstall)
@@ -98,6 +100,10 @@ func (s *Server) ListenAndServe(ctx context.Context, addr string) error {
 
 func (s *Server) handleHealthz(w http.ResponseWriter, _ *http.Request) {
 	w.WriteHeader(http.StatusOK)
+}
+
+func (s *Server) handleVersion(w http.ResponseWriter, _ *http.Request) {
+	writeJSON(w, http.StatusOK, versionResponse{Version: s.version})
 }
 
 func decode[T any](w http.ResponseWriter, r *http.Request) (T, bool) {

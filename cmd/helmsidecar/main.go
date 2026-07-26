@@ -15,6 +15,11 @@ import (
 	"ainexushub.local/helm-sidecar/internal/helmrunner"
 )
 
+// version is set via -ldflags "-X main.version=..." at build time (see
+// Containerfile, build.sh, and the VERSION file it reads from); "dev" is
+// what a plain `go build` outside that pipeline produces.
+var version = "dev"
+
 const (
 	defaultPort = "8080"
 
@@ -68,9 +73,9 @@ func run() int {
 	defer stop()
 
 	runner := helmrunner.New()
-	srv := api.New(runner, log)
+	srv := api.New(runner, log, version)
 
-	log.Info("helm sidecar starting", "mode", mode, "addr", addr)
+	log.Info("helm sidecar starting", "version", version, "mode", mode, "addr", addr)
 	if err := srv.ListenAndServe(ctx, addr); err != nil {
 		log.Error("helm sidecar exited", "error", err)
 		return 1
