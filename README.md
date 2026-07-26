@@ -1,4 +1,4 @@
-# Helm Sidecar
+# Helm Service
 
 A Kubernetes service that gives another workload the ability to run Helm
 install/upgrade/uninstall/status/template/lint — **without a shell, a
