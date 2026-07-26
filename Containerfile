@@ -21,8 +21,9 @@ COPY internal/ ./internal/
 
 ARG TARGETOS=linux
 ARG TARGETARCH=amd64
+ARG VERSION=dev
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} \
-    go build -trimpath -ldflags="-s -w" -o /out/helmsidecar ./cmd/helmsidecar
+    go build -trimpath -ldflags="-s -w -X main.version=${VERSION}" -o /out/helmsidecar ./cmd/helmsidecar
 
 # distroless/static-debian12 ships CA certificates (needed for TLS to the
 # Kubernetes API / OCI registries) and a nonroot (uid 65532) user, but no

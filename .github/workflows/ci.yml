@@ -96,7 +96,13 @@ jobs:
       - uses: actions/checkout@v7
 
       - name: Build image
-        run: TAG=ci ./build.sh
+        # Force docker: ubuntu-latest runners ship podman too, and
+        # build.sh prefers podman when present. That leaves the image in
+        # podman's local storage, which trivy-action's image scan below
+        # doesn't check by default (it looks for a running podman socket,
+        # not the CLI store) - it would fall through every backend and
+        # finally 401 trying to pull "helm-sidecar:ci" from Docker Hub.
+        run: BUILDER=docker TAG=ci ./build.sh
 
       - name: Trivy image scan
         uses: aquasecurity/trivy-action@v0.36.0

@@ -3,23 +3,29 @@ set -e
 
 cd "$(dirname "$0")"
 
+APP_VERSION=$(cat VERSION)
+
 REGISTRY=${REGISTRY:-""}
 IMAGE_NAME=${IMAGE_NAME:-"helm-sidecar"}
-TAG=${TAG:-"latest"}
+TAG=${TAG:-"${APP_VERSION}"}
 GO_VERSION=${GO_VERSION:-"1.26"}
 
 FULL_IMAGE="${REGISTRY:+${REGISTRY}/}${IMAGE_NAME}:${TAG}"
 
-BUILDER="docker"
-if command -v podman &> /dev/null; then
-    BUILDER="podman"
+BUILDER=${BUILDER:-""}
+if [ -z "${BUILDER}" ]; then
+    BUILDER="docker"
+    if command -v podman &> /dev/null; then
+        BUILDER="podman"
+    fi
 fi
 
-echo "Building helm sidecar image: ${FULL_IMAGE} (builder: ${BUILDER}, go ${GO_VERSION})"
+echo "Building helm sidecar image: ${FULL_IMAGE} (builder: ${BUILDER}, go ${GO_VERSION}, app version ${APP_VERSION})"
 
 ${BUILDER} build \
     -f Containerfile \
     --build-arg GO_VERSION="${GO_VERSION}" \
+    --build-arg VERSION="${APP_VERSION}" \
     -t "${FULL_IMAGE}" \
     .
 

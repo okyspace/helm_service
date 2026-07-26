@@ -4,8 +4,10 @@ replicaCount: 1
 
 image:
   # Same image as sidecar mode - see ../../build.sh / ../../Containerfile.
+  # Tag matches ../../VERSION as of this chart's own version below; bump
+  # both together, or override at install time.
   repository: helm-sidecar
-  tag: "latest"
+  tag: "0.1.0"
   pullPolicy: IfNotPresent
 
 # Must stay "deployment" for this chart: it's what makes the binary bind
